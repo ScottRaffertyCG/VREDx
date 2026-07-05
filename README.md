@@ -1,4 +1,4 @@
-# VredX — MaterialX Authoring for VRED
+# VredX - MaterialX Authoring for VRED
 
 A VRED script plugin that adds a node-graph editor for **authoring, editing, and
 applying MaterialX materials** inside Autodesk VRED Pro.
