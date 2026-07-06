@@ -17,10 +17,11 @@ same convention the MaterialX Graph Editor uses, so layout survives a
 save/load round-trip and remains compatible with other tools.
 """
 
+import os
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
-from . import mtlx_types
+from . import mtlx_paths, mtlx_types
 from .graph import Graph
 
 MATERIALX_VERSION = "1.39"
@@ -30,8 +31,12 @@ MATERIALX_VERSION = "1.39"
 POSITION_SCALE = 0.01
 
 
-def write_document(graph: Graph) -> str:
+def write_document(graph: Graph, output_path: str = None) -> str:
     """Serialize the graph to a MaterialX XML string."""
+    filename_overrides = {}
+    if output_path:
+        filename_overrides = mtlx_paths.stage_textures_for_output(
+            graph, output_path)
     root = ET.Element("materialx")
     root.set("version", MATERIALX_VERSION)
     if graph.colorspace:
@@ -45,15 +50,16 @@ def write_document(graph: Graph) -> str:
         for key, value in sorted(node.extra_attrs.items()):
             if key not in ("name", "type", "xpos", "ypos"):
                 elem.set(key, value)
-        _write_inputs(graph, node, elem)
+        _write_inputs(graph, node, elem, filename_overrides.get(node.name))
 
     return _pretty(root)
 
 
 def save_document(graph: Graph, path: str):
-    text = write_document(graph)
+    text = write_document(graph, output_path=path)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(text)
+    graph.document_dir = os.path.dirname(os.path.abspath(path))
 
 
 # ----------------------------------------------------------------- helpers
@@ -87,8 +93,9 @@ def _fmt_pos(v: float) -> str:
     return ("%.6f" % v).rstrip("0").rstrip(".")
 
 
-def _write_inputs(graph: Graph, node, elem):
+def _write_inputs(graph: Graph, node, elem, filename_overrides=None):
     """Emit one <input> per connection or explicit value override."""
+    filename_overrides = filename_overrides or {}
     connected = {}
     for edge in graph.edges:
         if edge.dst_node == node.name:
@@ -116,9 +123,9 @@ def _write_inputs(graph: Graph, node, elem):
             if len(src.nodedef.outputs) > 1 or edge.src_output != "out":
                 inp.set("output", edge.src_output)
         else:
+            value = filename_overrides.get(input_name, node.values[input_name])
             inp.set("value",
-                    mtlx_types.format_value(input_type,
-                                            node.values[input_name]))
+                    mtlx_types.format_value(input_type, value))
 
         for key, value in sorted(node.input_attrs.get(input_name,
                                                       {}).items()):

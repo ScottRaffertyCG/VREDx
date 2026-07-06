@@ -106,6 +106,9 @@ class Graph:
         self.nodes: Dict[str, Node] = {}
         self.edges: List[Edge] = []
         self.colorspace = "lin_rec709"
+        # Directory of the .mtlx file this graph was loaded from or last
+        # saved to; used to resolve relative texture paths.
+        self.document_dir = ""
 
     # ------------------------------------------------------------- nodes
 

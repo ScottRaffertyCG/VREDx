@@ -14,6 +14,7 @@ Nodes whose definition is unknown to the library are preserved as
 foreign or newer documents still open with warnings.
 """
 
+import os
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
@@ -45,7 +46,10 @@ class ReadResult:
 
 def load_document(path: str, library: NodeDefLibrary) -> ReadResult:
     with open(path, "r", encoding="utf-8") as handle:
-        return read_document(handle.read(), library, name_hint=path)
+        result = read_document(handle.read(), library, name_hint=path)
+    result.graph.document_dir = os.path.dirname(os.path.abspath(path))
+    mtlx_paths.absolutize_graph_filenames(result.graph)
+    return result
 
 
 def read_document(text: str, library: NodeDefLibrary,
@@ -208,7 +212,7 @@ def _create_node(graph: Graph, elem: ET.Element, library: NodeDefLibrary,
         if _strip_ns(inp.tag) != "input":
             continue
         input_name = inp.get("name", "")
-        value_text = inp.get("value")
+        value_text = _input_value_text(inp)
         input_type = inp.get("type") or (
             node.nodedef.find_input(input_name).type
             if node.nodedef.find_input(input_name) else "float")
@@ -221,6 +225,16 @@ def _create_node(graph: Graph, elem: ET.Element, library: NodeDefLibrary,
             node.input_attrs[input_name] = extra
 
     return node
+
+
+def _input_value_text(inp: ET.Element) -> Optional[str]:
+    text = inp.get("value")
+    if text is not None:
+        return text
+    for child in inp:
+        if _strip_ns(child.tag) == "value" and child.text:
+            return child.text.strip()
+    return None
 
 
 def _resolve_source(inp: ET.Element, prefix: str,
