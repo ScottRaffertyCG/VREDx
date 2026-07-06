@@ -109,6 +109,10 @@ class Graph:
         # Directory of the .mtlx file this graph was loaded from or last
         # saved to; used to resolve relative texture paths.
         self.document_dir = ""
+        # Temp folder when the graph was loaded from a .zip archive.
+        self.temp_extract_dir = ""
+        # Absolute path of the .mtlx file backing this graph, if any.
+        self.source_mtlx_path = ""
 
     # ------------------------------------------------------------- nodes
 

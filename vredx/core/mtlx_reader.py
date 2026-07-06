@@ -18,7 +18,7 @@ import os
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
-from . import mtlx_paths, mtlx_types
+from . import mtlx_archive, mtlx_paths, mtlx_types
 from .graph import Graph, Node, make_opaque_nodedef
 from .mtlx_writer import POSITION_SCALE
 from .nodedef_library import InputDef, NodeDefLibrary
@@ -44,10 +44,18 @@ class ReadResult:
         self.warnings = warnings
 
 
-def load_document(path: str, library: NodeDefLibrary) -> ReadResult:
-    with open(path, "r", encoding="utf-8") as handle:
-        result = read_document(handle.read(), library, name_hint=path)
-    result.graph.document_dir = os.path.dirname(os.path.abspath(path))
+def load_document(path: str, library: NodeDefLibrary,
+                  archive_member: str = None) -> ReadResult:
+    temp_root = ""
+    mtlx_path = path
+    if mtlx_archive.is_zip_path(path):
+        temp_root, mtlx_path = mtlx_archive.extract_zip(
+            path, member=archive_member)
+    with open(mtlx_path, "r", encoding="utf-8") as handle:
+        result = read_document(handle.read(), library, name_hint=mtlx_path)
+    result.graph.document_dir = os.path.dirname(os.path.abspath(mtlx_path))
+    result.graph.source_mtlx_path = os.path.abspath(mtlx_path)
+    result.graph.temp_extract_dir = temp_root
     mtlx_paths.absolutize_graph_filenames(result.graph)
     return result
 

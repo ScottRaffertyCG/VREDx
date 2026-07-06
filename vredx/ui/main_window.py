@@ -17,7 +17,7 @@ from PySide6 import QtCore, QtWidgets
 from ..core import validator
 from ..core.commands import CommandStack
 from ..core.graph import Graph
-from ..core import mtlx_reader, mtlx_writer
+from ..core import mtlx_archive, mtlx_reader, mtlx_writer
 from ..vredbridge import vred_api
 from ..vredbridge.material_bridge import (
     BridgeError, MaterialBridge, default_document_path, is_writable_path,
@@ -80,6 +80,7 @@ class VredXWindow(QtWidgets.QWidget):
         self.stack = CommandStack()
         self.bridge = MaterialBridge()
         self.current_path = None
+        self._import_temp_dir = None
         self._dirty = False
         self._apply_busy = False
         self._apply_pending = False
@@ -372,25 +373,94 @@ class VredXWindow(QtWidgets.QWidget):
     def open_dialog(self):
         path, _f = QtWidgets.QFileDialog.getOpenFileName(
             self, "Open MaterialX document", "",
-            "MaterialX (*.mtlx);;All files (*)")
+            "MaterialX and archives (*.mtlx *.zip);;"
+            "MaterialX (*.mtlx);;"
+            "Zip archives (*.zip);;"
+            "All files (*)")
         if path:
             self.open_document(path)
 
+    def _pick_archive_member(self, archive_path, members):
+        """Ask which .mtlx to open when a zip contains several candidates."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Choose MaterialX document")
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.addWidget(QtWidgets.QLabel(
+            "This archive contains multiple MaterialX files.\n"
+            "Choose which one to open:",
+            dialog))
+        list_widget = QtWidgets.QListWidget(dialog)
+        for member in members:
+            list_widget.addItem(member)
+        list_widget.setCurrentRow(0)
+        layout.addWidget(list_widget, 1)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
+            dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QtWidgets.QDialog.Accepted:
+            return None
+        item = list_widget.currentItem()
+        return item.text() if item is not None else None
+
+    def _cleanup_import_temp(self, temp_root=None):
+        if temp_root is None:
+            temp_root = self._import_temp_dir
+        mtlx_archive.remove_extract_dir(temp_root or "")
+        if temp_root is None or temp_root == self._import_temp_dir:
+            self._import_temp_dir = None
+
     def open_document(self, path):
         self.ensure_editor_ready()
+        archive_member = None
+        if mtlx_archive.is_zip_path(path):
+            try:
+                members = mtlx_archive.list_mtlx_members(path)
+            except (OSError, mtlx_archive.ArchiveError) as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "VredX", "Could not read archive:\n%s" % exc)
+                return
+            if not members:
+                QtWidgets.QMessageBox.critical(
+                    self, "VredX",
+                    "No .mtlx file found in archive:\n%s" % path)
+                return
+            if len(members) > 1 and mtlx_archive.needs_member_choice(members):
+                archive_member = self._pick_archive_member(path, members)
+                if archive_member is None:
+                    return
         try:
-            result = mtlx_reader.load_document(path, self.library)
+            result = mtlx_reader.load_document(
+                path, self.library, archive_member=archive_member)
+        except (mtlx_archive.ArchiveError, OSError, ValueError) as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "VredX", "Could not open document:\n%s" % exc)
+            return
         except Exception as exc:
             QtWidgets.QMessageBox.critical(
                 self, "VredX", "Could not open document:\n%s" % exc)
             return
-        save_path = self._document_save_path(result.graph, path)
-        redirected = (
-            os.path.normcase(os.path.abspath(save_path))
-            != os.path.normcase(os.path.abspath(path)))
+        self._cleanup_import_temp()
+        if result.graph.temp_extract_dir:
+            self._import_temp_dir = result.graph.temp_extract_dir
+        loaded_path = result.graph.source_mtlx_path or path
+        if mtlx_archive.is_zip_path(path):
+            save_path = default_document_path(
+                self.bridge.output_dir, result.graph.name)
+            redirected = True
+        else:
+            save_path = self._document_save_path(result.graph, loaded_path)
+            redirected = (
+                os.path.normcase(os.path.abspath(save_path))
+                != os.path.normcase(os.path.abspath(loaded_path)))
         self._set_graph(result.graph, save_path)
         if redirected:
             self._dirty = True
+        if mtlx_archive.is_zip_path(path):
+            self.status.setText(
+                "Opened from archive; save will write to Documents/VredX.")
         self.view.fit_all()
 
     def _document_save_path(self, graph, source_path):
@@ -706,6 +776,7 @@ class VredXWindow(QtWidgets.QWidget):
 
     def shutdown(self):
         """Called by the plugin before unload."""
+        self._cleanup_import_temp()
         self._validate_timer.stop()
         self._apply_timer.stop()
         self._preview_timer.stop()
