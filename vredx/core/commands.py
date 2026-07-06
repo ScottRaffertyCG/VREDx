@@ -197,6 +197,26 @@ class SetValueCommand(Command):
         return True
 
 
+class SetExposeCommand(Command):
+    """Toggle whether a node appears in VRED's Realistic material editor."""
+
+    def __init__(self, graph: Graph, node_name: str, exposed: bool):
+        self.graph = graph
+        self.node_name = node_name
+        self.new_exposed = exposed
+        self._old_exposed = False
+        self.label = "%s %s in material" % (
+            "Expose" if exposed else "Hide", node_name)
+
+    def redo(self):
+        node = self.graph.node(self.node_name)
+        self._old_exposed = node.expose_in_material
+        node.expose_in_material = self.new_exposed
+
+    def undo(self):
+        self.graph.node(self.node_name).expose_in_material = self._old_exposed
+
+
 class MoveNodesCommand(Command):
     """Records node position changes (for undo of canvas drags)."""
 

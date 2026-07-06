@@ -13,6 +13,7 @@ from functools import partial
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..core import commands, mtlx_types
+from ..core.graph import can_expose_in_material
 from .color_dialog import pick_color
 
 
@@ -225,12 +226,27 @@ class InspectorPanel(QtWidgets.QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(6)
 
-        header = QtWidgets.QLabel(
-            "<b>%s</b><br><span style='color:#9a9a9f'>%s — %s</span>"
-            % (html.escape(node.name), html.escape(node.category),
-               html.escape(node.nodedef.library)))
-        header.setTextFormat(QtCore.Qt.RichText)
-        outer.addWidget(header)
+        name_row = QtWidgets.QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_label = QtWidgets.QLabel("<b>%s</b>" % html.escape(node.name))
+        name_label.setTextFormat(QtCore.Qt.RichText)
+        name_row.addWidget(name_label, 1)
+        if can_expose_in_material(node, graph):
+            expose = QtWidgets.QCheckBox("Expose in material")
+            expose.setChecked(node.expose_in_material)
+            expose.setToolTip(
+                "Show this node in VRED's Realistic material editor.")
+            expose.toggled.connect(self._commit_expose)
+            name_row.addWidget(expose, 0, QtCore.Qt.AlignRight)
+        name_widget = QtWidgets.QWidget()
+        name_widget.setLayout(name_row)
+        outer.addWidget(name_widget)
+
+        subtitle = QtWidgets.QLabel(
+            "<span style='color:#9a9a9f'>%s — %s</span>"
+            % (html.escape(node.category), html.escape(node.nodedef.library)))
+        subtitle.setTextFormat(QtCore.Qt.RichText)
+        outer.addWidget(subtitle)
         if node.nodedef.doc:
             doc = QtWidgets.QLabel(node.nodedef.doc)
             doc.setWordWrap(True)
@@ -344,6 +360,12 @@ class InspectorPanel(QtWidgets.QWidget):
             return
         self.stack.push(commands.SetValueCommand(
             self.graph, self.node.name, input_name, value))
+
+    def _commit_expose(self, exposed):
+        if self.node is None:
+            return
+        self.stack.push(commands.SetExposeCommand(
+            self.graph, self.node.name, exposed))
 
     def _commit_merged(self, input_name, value):
         if self.node is None:

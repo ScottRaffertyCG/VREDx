@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
 from . import mtlx_archive, mtlx_paths, mtlx_types
-from .graph import Graph, Node, make_opaque_nodedef
+from .graph import Graph, Node, make_opaque_nodedef, sync_expose_in_material
 from .mtlx_writer import POSITION_SCALE
 from .nodedef_library import InputDef, NodeDefLibrary
 
@@ -141,6 +141,8 @@ def read_document(text: str, library: NodeDefLibrary,
 
     if not had_editor_positions and len(graph.nodes) > 1:
         mtlx_paths.auto_layout_nodes(graph)
+
+    sync_expose_in_material(graph)
 
     return ReadResult(graph, warnings)
 

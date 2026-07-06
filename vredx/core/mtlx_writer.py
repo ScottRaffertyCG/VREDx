@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
 from . import mtlx_paths, mtlx_types
-from .graph import Graph
+from .graph import Graph, can_expose_in_material
 
 MATERIALX_VERSION = "1.39"
 
@@ -127,8 +127,13 @@ def _write_inputs(graph: Graph, node, elem, filename_overrides=None):
             inp.set("value",
                     mtlx_types.format_value(input_type, value))
 
-        for key, value in sorted(node.input_attrs.get(input_name,
-                                                      {}).items()):
+        attrs = dict(node.input_attrs.get(input_name, {}))
+        if edge is None and can_expose_in_material(node, graph):
+            if node.expose_in_material:
+                attrs.pop("uivisible", None)
+            else:
+                attrs["uivisible"] = "false"
+        for key, value in sorted(attrs.items()):
             if key not in ("name", "type", "value", "nodename", "output"):
                 inp.set(key, value)
 

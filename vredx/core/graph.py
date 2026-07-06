@@ -58,6 +58,9 @@ class Node:
         # Extra per-input XML attributes (colorspace, channels, unit...)
         # preserved for round-trip: {input_name: {attr: value}}.
         self.input_attrs: Dict[str, Dict[str, str]] = {}
+        # When True, literal inputs are written without uivisible="false" so
+        # VRED shows this node in its Realistic material editor.
+        self.expose_in_material = False
 
     # ------------------------------------------------------------ inputs
 
@@ -285,6 +288,48 @@ class Graph:
         if len(order) != len(self.nodes):
             raise GraphError("Graph contains a cycle")
         return order
+
+
+def connected_inputs(graph: Graph, node_name: str) -> set:
+    """Input port names on *node_name* that have an incoming edge."""
+    return {e.dst_input for e in graph.edges if e.dst_node == node_name}
+
+
+def material_ui_inputs(node: Node, connected: set) -> Iterator[str]:
+    """Unconnected, non-shader inputs VRED can show in the material editor."""
+    for idef in node.nodedef.inputs:
+        if idef.name in connected:
+            continue
+        if mtlx_types.is_shader_type(idef.type):
+            continue
+        yield idef.name
+
+
+def can_expose_in_material(node: Node, graph: Graph) -> bool:
+    """Whether the inspector may offer an 'Expose in material' toggle."""
+    if node.is_shader_semantic():
+        return False
+    connected = connected_inputs(graph, node.name)
+    return any(True for _ in material_ui_inputs(node, connected))
+
+
+def infer_expose_in_material(node: Node, graph: Graph) -> bool:
+    """Derive expose flag from uivisible attributes on imported inputs."""
+    if not can_expose_in_material(node, graph):
+        return False
+    connected = connected_inputs(graph, node.name)
+    written = [name for name in material_ui_inputs(node, connected)
+               if name in node.values]
+    if not written:
+        return False
+    return any(node.input_attrs.get(name, {}).get("uivisible") != "false"
+               for name in written)
+
+
+def sync_expose_in_material(graph: Graph) -> None:
+    """Set :attr:`Node.expose_in_material` on every node after import."""
+    for node in graph.nodes.values():
+        node.expose_in_material = infer_expose_in_material(node, graph)
 
 
 def _sanitize_name(name: str) -> str:
