@@ -92,18 +92,21 @@ class CommandStack:
 class AddNodeCommand(Command):
     def __init__(self, graph: Graph, nodedef: NodeDef,
                  name: Optional[str] = None,
-                 position: Tuple[float, float] = (0.0, 0.0)):
+                 position: Tuple[float, float] = (0.0, 0.0),
+                 compound: Optional[str] = None):
         self.graph = graph
         self.nodedef = nodedef
         self.requested_name = name
         self.position = position
+        self.compound = compound
         self.node: Optional[Node] = None
         self.label = "Add %s" % nodedef.node
 
     def redo(self):
         if self.node is None:
             self.node = self.graph.add_node(
-                self.nodedef, self.requested_name, self.position)
+                self.nodedef, self.requested_name, self.position,
+                compound=self.compound)
         else:
             self.graph.restore_node(self.node, [])
 

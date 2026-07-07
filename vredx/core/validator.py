@@ -67,6 +67,11 @@ def validate(graph: Graph, library: Optional[NodeDefLibrary] = None
     return ValidationResult(issues)
 
 
+def _is_vredx_only_node(node) -> bool:
+    """Nodes that exist for VredX editing but are not sent to VRED."""
+    return node.is_compound
+
+
 # ----------------------------------------------------------------- checks
 
 def _check_outputs(graph: Graph, issues: List[Issue]):
@@ -112,6 +117,8 @@ def _check_connections(graph: Graph, issues: List[Issue]):
         try:
             src = graph.node(edge.src_node)
             dst = graph.node(edge.dst_node)
+            if _is_vredx_only_node(src) or _is_vredx_only_node(dst):
+                continue
             src_type = src.output_def(edge.src_output).type
             dst_type = dst.input_def(edge.dst_input).type
         except Exception as exc:
@@ -140,6 +147,8 @@ def _check_connections(graph: Graph, issues: List[Issue]):
 def _check_unknown_nodes(graph: Graph, library: Optional[NodeDefLibrary],
                          issues: List[Issue]):
     for node in graph.nodes.values():
+        if _is_vredx_only_node(node):
+            continue
         if node.opaque:
             issues.append(Issue(
                 WARNING,
@@ -157,6 +166,8 @@ def _check_unknown_nodes(graph: Graph, library: Optional[NodeDefLibrary],
 
 def _check_vred_caveats(graph: Graph, issues: List[Issue]):
     for node in graph.nodes.values():
+        if _is_vredx_only_node(node):
+            continue
         category = node.category
 
         if category in ("displacement", "displacementshader") or \
@@ -202,6 +213,8 @@ def _check_vred_caveats(graph: Graph, issues: List[Issue]):
 
     # Unconnected image filenames.
     for node in graph.nodes.values():
+        if _is_vredx_only_node(node):
+            continue
         if node.category not in ("image", "tiledimage"):
             continue
         value = node.get_value("file")

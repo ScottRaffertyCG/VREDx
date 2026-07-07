@@ -54,7 +54,10 @@ class NodeGraphView(QtWidgets.QGraphicsView):
             self.scale(step, step)
 
     def fit_all(self):
-        items = self.graph_scene().node_items.values()
+        scene = self.graph_scene()
+        items = list(scene.node_items.values())
+        if scene._output_panel is not None:
+            items.append(scene._output_panel)
         if not items:
             return
         rect = QtCore.QRectF()

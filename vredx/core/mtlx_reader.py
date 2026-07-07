@@ -6,8 +6,9 @@ Handles both layouts found in the wild:
 
 * flat documents (what :mod:`vredx.core.mtlx_writer` produces), and
 * nodegraph-based documents (typical DCC exports, VRED-shipped BxDF
-  graphs): compound ``<nodegraph>`` contents are flattened into the
-  editable graph and ``<output>`` indirections are resolved.
+  graphs): compound ``<nodegraph>`` contents are kept in nested scopes
+  and represented by group nodes at the parent level; ``<output>``
+  indirections become compound output ports.
 
 Nodes whose definition is unknown to the library are preserved as
 *opaque* nodes (with synthesized definitions) instead of failing, so
@@ -19,7 +20,8 @@ import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
 from . import mtlx_archive, mtlx_paths, mtlx_types
-from .graph import Graph, Node, make_opaque_nodedef, sync_expose_in_material
+from .graph import (Graph, Node, make_compound_nodedef, make_opaque_nodedef,
+                    sync_expose_in_material, CompoundOutput)
 from .mtlx_writer import POSITION_SCALE
 from .nodedef_library import InputDef, NodeDefLibrary
 
@@ -74,8 +76,9 @@ def read_document(text: str, library: NodeDefLibrary,
     name_map: Dict[str, str] = {}
     # (qualified name) -> element, for the connection pass
     node_elems: List[Tuple[str, ET.Element, str]] = []  # (qual, elem, prefix)
-    # nodegraph outputs: "ng/outname" -> (source qual name, source output)
-    ng_outputs: Dict[str, Tuple[str, str]] = {}
+    # nodegraph outputs: "ng/outname" -> (internal qual nodename, output, type)
+    ng_outputs: Dict[str, Tuple[str, str, str]] = {}
+    compound_names: List[str] = []
     had_editor_positions = False
 
     # Functional (nodedef-implementing) nodegraphs are library plumbing,
@@ -94,13 +97,15 @@ def read_document(text: str, library: NodeDefLibrary,
             if elem.get("nodedef") or elem.get("name") in functional_graphs:
                 continue  # functional graph implementing a nodedef: skip
             ng_name = elem.get("name", "nodegraph")
+            compound_names.append(ng_name)
             for child in elem:
                 ctag = _strip_ns(child.tag)
                 if ctag == "output":
                     out_name = child.get("name", "out")
                     ng_outputs["%s/%s" % (ng_name, out_name)] = (
                         "%s/%s" % (ng_name, child.get("nodename", "")),
-                        child.get("output", "out"))
+                        child.get("output", "out"),
+                        child.get("type", "float"))
                     continue
                 if ctag in _NON_NODE_TAGS:
                     continue
@@ -115,9 +120,20 @@ def read_document(text: str, library: NodeDefLibrary,
             if elem.get("xpos") is not None or elem.get("ypos") is not None:
                 had_editor_positions = True
 
-    for qual, elem, _prefix in node_elems:
-        node = _create_node(graph, elem, library, warnings)
+    for qual, elem, prefix in node_elems:
+        node = _create_node(graph, elem, library, warnings,
+                            compound=prefix or None)
         name_map[qual] = node.name
+
+    for ng_name in compound_names:
+        outputs = _compound_outputs(graph, ng_name, ng_outputs, name_map)
+        if not outputs:
+            continue
+        graph.compounds[ng_name] = outputs
+        proxy = graph.add_node(
+            make_compound_nodedef(ng_name, outputs),
+            name=ng_name, is_compound=True)
+        name_map[ng_name] = proxy.name
 
     # ------------------------------------------------------ pass 2: edges
     for qual, elem, prefix in node_elems:
@@ -179,7 +195,8 @@ def _pick_variant(library: NodeDefLibrary, category: str, out_type: str,
 
 
 def _create_node(graph: Graph, elem: ET.Element, library: NodeDefLibrary,
-                 warnings: List[str]) -> Node:
+                 warnings: List[str],
+                 compound: Optional[str] = None) -> Node:
     category = _strip_ns(elem.tag)
     out_type = elem.get("type", "none")
     src_name = elem.get("name", category)
@@ -209,7 +226,8 @@ def _create_node(graph: Graph, elem: ET.Element, library: NodeDefLibrary,
             % (category, out_type))
 
     node = graph.add_node(nodedef, name=src_name,
-                          position=_read_position(elem), opaque=opaque)
+                          position=_read_position(elem), opaque=opaque,
+                          compound=compound)
     if node.name != src_name:
         warnings.append("Node '%s' renamed to '%s' (duplicate name)."
                         % (src_name, node.name))
@@ -248,7 +266,7 @@ def _input_value_text(inp: ET.Element) -> Optional[str]:
 
 
 def _resolve_source(inp: ET.Element, prefix: str,
-                    ng_outputs: Dict[str, Tuple[str, str]]
+                    ng_outputs: Dict[str, Tuple[str, str, str]]
                     ) -> Tuple[Optional[str], str]:
     """Return (qualified source node name, source output) for an input."""
     nodename = inp.get("nodename")
@@ -256,15 +274,8 @@ def _resolve_source(inp: ET.Element, prefix: str,
     output = inp.get("output", "out")
 
     if nodegraph:
-        # Reference to a compound nodegraph's output.
-        key = "%s/%s" % (nodegraph, output)
-        if key in ng_outputs:
-            return ng_outputs[key]
-        # single-output graphs may omit the output name
-        for k, v in ng_outputs.items():
-            if k.startswith(nodegraph + "/"):
-                return v
-        return None, "out"
+        # External reference: connect to the compound proxy output port.
+        return nodegraph, output
 
     if nodename:
         if prefix:
@@ -273,6 +284,26 @@ def _resolve_source(inp: ET.Element, prefix: str,
         return nodename, output
 
     return None, "out"
+
+
+def _compound_outputs(graph: Graph, ng_name: str,
+                      ng_outputs: Dict[str, Tuple[str, str, str]],
+                      name_map: Dict[str, str]) -> List[CompoundOutput]:
+    """Build compound interface outputs for a nodegraph."""
+    outputs: List[CompoundOutput] = []
+    prefix = ng_name + "/"
+    for key, (qual, internal_output, out_type) in sorted(ng_outputs.items()):
+        if not key.startswith(prefix):
+            continue
+        out_name = key[len(prefix):]
+        internal_node = name_map.get(qual)
+        if internal_node is None:
+            continue
+        outputs.append(CompoundOutput(
+            name=out_name, type=out_type,
+            internal_node=internal_node,
+            internal_output=internal_output))
+    return outputs
 
 
 def _make_edge(graph: Graph, src: str, src_output: str,

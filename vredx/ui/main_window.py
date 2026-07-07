@@ -12,6 +12,8 @@ Script Editor.
 
 import os
 
+from typing import List
+
 from PySide6 import QtCore, QtWidgets
 
 from ..core import validator
@@ -26,6 +28,7 @@ from . import style
 from .apply_progress import ApplyProgressDialog
 from .canvas.scene import NodeGraphScene
 from .canvas.view import NodeGraphView
+from .graph_breadcrumb import GraphBreadcrumb
 from .inspector import InspectorPanel
 from .palette import PalettePanel
 from .preview_panel import PreviewPanel
@@ -71,6 +74,7 @@ class VredXWindow(QtWidgets.QWidget):
         self._editor_ready = library is not None
         self._splitter = None
         self._right_panel = None
+        self._canvas_widget = None
         self._menu_preview = None
         self._menu_attributes = None
         self._menu_palette = None
@@ -85,6 +89,7 @@ class VredXWindow(QtWidgets.QWidget):
         self._apply_busy = False
         self._apply_pending = False
         self._material_applied_once = False
+        self._nav_stack: List[str] = []
 
         self.inspector = InspectorPanel(self.stack, self)
         self.validation = ValidationPanel(self)
@@ -136,7 +141,17 @@ class VredXWindow(QtWidgets.QWidget):
         self._create_canvas(library)
         if self._splitter is not None:
             self._splitter.replaceWidget(0, self.palette_panel)
-            self._splitter.replaceWidget(1, self.view)
+            if self._canvas_widget is not None and self.view is not None:
+                layout = self._canvas_widget.layout()
+                if layout.count() >= 2:
+                    old = layout.itemAt(1).widget()
+                    if old is not None and old is not self.view:
+                        layout.replaceWidget(old, self.view)
+                        old.deleteLater()
+                elif layout.count() == 1:
+                    layout.addWidget(self.view, 1)
+            else:
+                self._splitter.replaceWidget(1, self.view)
         self._connect()
         self.new_document()
 
@@ -152,17 +167,27 @@ class VredXWindow(QtWidgets.QWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
 
-        root.addWidget(self._build_menubar())
+        self._menubar = self._build_menubar()
+        root.addWidget(self._menubar)
 
         # ---- main splitter
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, self)
         self._splitter = splitter
         splitter.addWidget(self.palette_panel)
+        canvas = QtWidgets.QWidget(self)
+        self._canvas_widget = canvas
+        canvas_layout = QtWidgets.QVBoxLayout(canvas)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(2)
+        self.breadcrumb = GraphBreadcrumb(canvas)
+        self.breadcrumb.sync_font_from_menubar(self._menubar)
+        canvas_layout.addWidget(self.breadcrumb)
         if self.view is not None:
-            splitter.addWidget(self.view)
+            canvas_layout.addWidget(self.view, 1)
         else:
-            splitter.addWidget(self._loading_widget(
-                "Node canvas will appear after libraries load."))
+            canvas_layout.addWidget(self._loading_widget(
+                "Node canvas will appear after libraries load."), 1)
+        splitter.addWidget(canvas)
 
         self._right_panel = QtWidgets.QWidget(self)
         right_layout = QtWidgets.QVBoxLayout(self._right_panel)
@@ -322,7 +347,8 @@ class VredXWindow(QtWidgets.QWidget):
         self._inspector_selection = []
         self.scene.selectionChanged.connect(self._on_selection)
         self.scene.graph_changed.connect(self._on_graph_changed)
-        self.scene.node_double_clicked.connect(self._focus_inspector)
+        self.scene.node_double_clicked.connect(self._on_node_double_clicked)
+        self.breadcrumb.navigated.connect(self._navigate_to_scope)
         self.palette_panel.add_requested.connect(self._add_from_palette)
         self.validation.issue_selected.connect(self._select_node)
 
@@ -501,6 +527,7 @@ class VredXWindow(QtWidgets.QWidget):
         prior = self._selection_snapshot()
         self.graph = graph
         self.current_path = path
+        self._reset_navigation()
         self.scene.set_graph(graph)
         self.inspector.set_material_name(graph.name)
         self._dirty = False
@@ -508,6 +535,43 @@ class VredXWindow(QtWidgets.QWidget):
         self._sync_document_status(result)
         self.view.fit_all()
         self._refresh_inspector_after_graph_change(prior)
+
+    def _reset_navigation(self):
+        self._nav_stack = []
+        if self.scene is not None:
+            self.scene.set_active_scope(None)
+        self._update_breadcrumb()
+
+    def _update_breadcrumb(self):
+        segments = [(self.graph.name or "Material", None)]
+        for compound_name in self._nav_stack:
+            segments.append((compound_name, compound_name))
+        self.breadcrumb.set_path(segments)
+
+    def _navigate_into(self, compound_name: str):
+        node = self.graph.nodes.get(compound_name)
+        if node is None or not node.is_compound:
+            return
+        self._nav_stack.append(compound_name)
+        self.scene.set_active_scope(compound_name)
+        self._update_breadcrumb()
+        self.scene.clearSelection()
+        self.view.fit_all()
+
+    def _navigate_to_scope(self, scope):
+        if scope is None:
+            self._nav_stack = []
+        else:
+            try:
+                index = self._nav_stack.index(scope) + 1
+            except ValueError:
+                return
+            self._nav_stack = self._nav_stack[:index]
+        self.scene.set_active_scope(
+            self._nav_stack[-1] if self._nav_stack else None)
+        self._update_breadcrumb()
+        self.scene.clearSelection()
+        self.view.fit_all()
 
     def _sync_document_status(self, result):
         """Refresh the status bar after loading a preset or document."""
@@ -725,6 +789,13 @@ class VredXWindow(QtWidgets.QWidget):
         self._inspector_selection = names
         nodes = [self.graph.nodes[n] for n in names if n in self.graph.nodes]
         self.inspector.show_selection(self.graph, nodes)
+
+    def _on_node_double_clicked(self, node_name):
+        node = self.graph.nodes.get(node_name)
+        if node is not None and node.is_compound:
+            self._navigate_into(node_name)
+            return
+        self._focus_inspector(node_name)
 
     def _focus_inspector(self, node_name):
         self.tabs.setCurrentWidget(self.inspector)

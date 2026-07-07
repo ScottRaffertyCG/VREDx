@@ -66,7 +66,7 @@ def save_document(graph: Graph, path: str):
 
 def _emit_order(graph: Graph):
     """Topological order: sources first, material node(s) last."""
-    order = graph.topological_order()
+    order = [n for n in graph.topological_order() if not n.is_compound]
     # Stable tie-break already applied inside topological_order (sorted
     # ready list); additionally push material nodes to the end so the
     # document reads pattern -> shader -> material.
@@ -118,10 +118,11 @@ def _write_inputs(graph: Graph, node, elem, filename_overrides=None):
         inp.set("type", input_type)
 
         if edge is not None:
-            src = graph.node(edge.src_node)
-            inp.set("nodename", edge.src_node)
-            if len(src.nodedef.outputs) > 1 or edge.src_output != "out":
-                inp.set("output", edge.src_output)
+            src_name, src_output = graph.resolve_edge_source(edge)
+            src = graph.node(src_name)
+            inp.set("nodename", src_name)
+            if len(src.nodedef.outputs) > 1 or src_output != "out":
+                inp.set("output", src_output)
         else:
             value = filename_overrides.get(input_name, node.values[input_name])
             inp.set("value",

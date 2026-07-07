@@ -41,6 +41,15 @@ class Edge:
         return (self.dst_node, self.dst_input)
 
 
+@dataclass
+class CompoundOutput:
+    """A named output port on a compound :class:`NodeGraph`."""
+    name: str
+    type: str
+    internal_node: str
+    internal_output: str = "out"
+
+
 class Node:
     """An instance of a MaterialX node in the document."""
 
@@ -51,6 +60,10 @@ class Node:
         self.nodedef = nodedef
         self.position = position
         self.opaque = opaque            # unknown def preserved from import
+        # Parent compound nodegraph name, or None for document-root nodes.
+        self.compound: Optional[str] = None
+        # True for the group node shown at the parent scope (not a real op).
+        self.is_compound: bool = False
         # Literal values overriding nodedef defaults, by input name.
         self.values: Dict[str, object] = {}
         # Raw XML attributes preserved for opaque nodes (round-trip).
@@ -108,6 +121,8 @@ class Graph:
         self.name = name
         self.nodes: Dict[str, Node] = {}
         self.edges: List[Edge] = []
+        # Compound nodegraph metadata: name -> exported output ports.
+        self.compounds: Dict[str, List[CompoundOutput]] = {}
         self.colorspace = "lin_rec709"
         # Directory of the .mtlx file this graph was loaded from or last
         # saved to; used to resolve relative texture paths.
@@ -121,11 +136,55 @@ class Graph:
 
     def add_node(self, nodedef: NodeDef, name: Optional[str] = None,
                  position: Tuple[float, float] = (0.0, 0.0),
-                 opaque: bool = False) -> Node:
+                 opaque: bool = False,
+                 compound: Optional[str] = None,
+                 is_compound: bool = False) -> Node:
         node = Node(self.unique_name(name or nodedef.node),
                     nodedef, position, opaque)
+        node.compound = compound
+        node.is_compound = is_compound
         self.nodes[node.name] = node
         return node
+
+    def compound_member_count(self, compound_name: str) -> int:
+        """Number of internal nodes inside a compound nodegraph."""
+        return sum(1 for node in self.nodes.values()
+                   if node.compound == compound_name and not node.is_compound)
+
+    def compound_export_outputs(self, compound_name: str,
+                                node_name: str) -> List[str]:
+        """Exported output port names driven by *node_name* inside a compound."""
+        return [output.name for output in self.compounds.get(compound_name, ())
+                if output.internal_node == node_name]
+
+    def is_compound_export_node(self, compound_name: str,
+                                node_name: str) -> bool:
+        return bool(self.compound_export_outputs(compound_name, node_name))
+
+    def nodes_in_scope(self, scope: Optional[str] = None) -> List[str]:
+        """Node names visible at *scope* (``None`` = document root)."""
+        names: List[str] = []
+        for name, node in self.nodes.items():
+            if scope is None:
+                if node.compound is None:
+                    names.append(name)
+            elif node.compound == scope and not node.is_compound:
+                names.append(name)
+        return sorted(names)
+
+    def edge_in_scope(self, edge: Edge, scope: Optional[str] = None) -> bool:
+        visible = set(self.nodes_in_scope(scope))
+        return edge.src_node in visible and edge.dst_node in visible
+
+    def resolve_edge_source(self, edge: Edge) -> Tuple[str, str]:
+        """Follow compound proxy outputs to the internal source node."""
+        src = self.node(edge.src_node)
+        if not src.is_compound:
+            return edge.src_node, edge.src_output
+        for output in self.compounds.get(src.name, ()):
+            if output.name == edge.src_output:
+                return output.internal_node, output.internal_output
+        return edge.src_node, edge.src_output
 
     def remove_node(self, name: str) -> Tuple[Node, List[Edge]]:
         """Remove a node and all its edges.  Returns them for undo."""
@@ -355,6 +414,19 @@ def _sanitize_name(name: str) -> str:
     if not name or name[0].isdigit():
         name = "n_" + name
     return name
+
+
+def make_compound_nodedef(name: str,
+                          outputs: List[CompoundOutput]) -> NodeDef:
+    """Synthesize a NodeDef for a compound nodegraph group node."""
+    return NodeDef(
+        name="COMPOUND_%s" % name,
+        node="nodegraph",
+        nodegroup="organization",
+        doc="Compound nodegraph '%s'." % name,
+        inputs=[],
+        outputs=[OutputDef(name=o.name, type=o.type) for o in outputs],
+    )
 
 
 def make_opaque_nodedef(category: str, output_type: str,
