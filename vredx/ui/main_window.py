@@ -30,6 +30,8 @@ from .canvas.view import NodeGraphView
 from .graph_breadcrumb import GraphBreadcrumb
 from .inspector import InspectorPanel
 from .palette import PalettePanel
+from .baking_panel import BakingPanel
+from ..baking.runtime import is_runtime_available
 from .preview_panel import PreviewPanel
 from .validation_panel import ValidationPanel
 
@@ -91,6 +93,9 @@ class VredXWindow(QtWidgets.QWidget):
         self._menu_preview = None
         self._menu_attributes = None
         self._menu_palette = None
+        self._menu_baking = None
+        self.baking_panel = None
+        self._baking_tab_index = None
 
         self.library = library
         self.graph = Graph("VredX_Material")
@@ -216,6 +221,11 @@ class VredXWindow(QtWidgets.QWidget):
         self.tabs.addTab(self.validation, "Validation")
         self.scene_panel = SceneMaterialsPanel(self.bridge, self)
         self.tabs.addTab(self.scene_panel, "Scene")
+        if is_runtime_available():
+            self.baking_panel = BakingPanel(self)
+            self._baking_tab_index = self.tabs.addTab(
+                self.baking_panel, "Baking")
+        self.tabs.currentChanged.connect(self._on_attributes_tab_changed)
         right_layout.addWidget(self.tabs, 1)
 
         splitter.addWidget(self._right_panel)
@@ -292,6 +302,11 @@ class VredXWindow(QtWidgets.QWidget):
         self._menu_attributes.setCheckable(True)
         self._menu_attributes.setChecked(True)
         self._menu_attributes.toggled.connect(self._toggle_attributes)
+        if is_runtime_available():
+            self._menu_baking = window_menu.addAction("&Baking")
+            self._menu_baking.setCheckable(True)
+            self._menu_baking.setChecked(False)
+            self._menu_baking.toggled.connect(self._toggle_baking)
         window_menu.addSeparator()
         self._menu_pop_out = window_menu.addAction("Pop &Out Editor")
         self._menu_pop_out.triggered.connect(self._pop_out_editor)
@@ -564,6 +579,8 @@ class VredXWindow(QtWidgets.QWidget):
         self._sync_document_status(result)
         self.view.fit_all()
         self._refresh_inspector_after_graph_change(prior)
+        if hasattr(self, "baking_panel") and self.baking_panel is not None:
+            self.baking_panel.sync_from_graph()
 
     def _reset_navigation(self):
         self._nav_stack = []
@@ -979,6 +996,35 @@ class VredXWindow(QtWidgets.QWidget):
 
     def _toggle_attributes(self, visible):
         self.tabs.setVisible(visible)
+
+    def _toggle_baking(self, visible):
+        if self._baking_tab_index is None:
+            return
+        if visible:
+            if self._menu_attributes is not None:
+                self._menu_attributes.setChecked(True)
+            self.tabs.setCurrentIndex(self._baking_tab_index)
+            self.baking_panel.sync_from_graph()
+        elif self.tabs.currentIndex() == self._baking_tab_index:
+            self.tabs.setCurrentIndex(0)
+
+    def _on_attributes_tab_changed(self, index):
+        if self._menu_baking is None or self._baking_tab_index is None:
+            return
+        on_baking = index == self._baking_tab_index
+        if self._menu_baking.isChecked() != on_baking:
+            self._menu_baking.blockSignals(True)
+            self._menu_baking.setChecked(on_baking)
+            self._menu_baking.blockSignals(False)
+
+    def show_baking_panel(self):
+        """Show the baking panel (VREDX menu shortcut)."""
+        if self._baking_tab_index is None:
+            return
+        if self._menu_baking is not None:
+            self._menu_baking.setChecked(True)
+        else:
+            self._toggle_baking(True)
 
     def _pop_out_editor(self):
         if self._floating_shell is not None:

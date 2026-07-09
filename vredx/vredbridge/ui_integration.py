@@ -64,6 +64,7 @@ class VredXMenu:
             ("Pop Out Editor", "pop_out_editor"),
             ("New Material", "new_material"),
             ("Import .mtlx...", "import_mtlx"),
+            ("Bake Textures…", "bake_textures"),
             (None, None),
             ("About VredX", "about"),
         ]

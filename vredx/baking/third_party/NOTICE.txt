@@ -1,0 +1,15 @@
+VredX Texture Baking — Third-Party Notice
+===========================================
+
+Texture baking in VredX uses the MaterialX library from the Academy Software
+Foundation (ASWF), distributed under the Apache License, Version 2.0.
+
+MaterialX Project:
+  https://github.com/AcademySoftwareFoundation/MaterialX
+
+Copyright notices and license terms for the bundled MaterialX runtime are
+provided in LICENSE-ASWF-MaterialX.txt in this directory.
+
+The ASWF runtime files under materialx/ are vendor binaries and are not
+modified by VredX. VredX-owned glue code (baketextures_runner.py, engine.py)
+invokes the upstream TextureBaker API via subprocess.

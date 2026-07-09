@@ -48,6 +48,7 @@ from vredx.core.nodedef_library import NodeDefLibrary           # noqa: E402
 from vredx.ui import style                                      # noqa: E402
 from vredx.ui.main_window import VredXWindow                    # noqa: E402
 from vredx.vredbridge import ui_integration                    # noqa: E402
+from vredx.baking.runtime import is_runtime_available          # noqa: E402
 
 
 class VredXPlugin:
@@ -75,13 +76,16 @@ class VredXPlugin:
             self.window.show()
 
         self.menu = ui_integration.VredXMenu()
-        self.menu.install({
+        menu_callbacks = {
             "open_editor": self.show_editor,
             "pop_out_editor": self.pop_out_editor,
             "new_material": self.new_material,
             "import_mtlx": self.import_mtlx,
             "about": self.show_about,
-        })
+        }
+        if is_runtime_available():
+            menu_callbacks["bake_textures"] = self.show_baking
+        self.menu.install(menu_callbacks)
 
     def _load_library(self):
         if self._library is None:
@@ -116,12 +120,21 @@ class VredXPlugin:
         self.show_editor()
         self.window.open_dialog()
 
+    def show_baking(self):
+        if not is_runtime_available():
+            return
+        self.show_editor()
+        self.window.show_baking_panel()
+
     def show_about(self):
         import vredx
         QtWidgets.QMessageBox.about(
             self.window, "About VredX",
             "<b>VredX %s</b><br>MaterialX authoring for Autodesk VRED.<br>"
-            "Node palette from:<br><code>%s</code>"
+            "Node palette from:<br><code>%s</code><br><br>"
+            "Texture baking powered by "
+            "<a href=\"https://github.com/AcademySoftwareFoundation/MaterialX\">"
+            "ASWF MaterialX</a> (Apache 2.0)."
             % (vredx.__version__,
                self.library.source_root or ""))
 

@@ -127,6 +127,31 @@ EDGE_WIDTH = 2.0
 # Panel chrome — matches WIDGET_QSS #VredXRoot background.
 PANEL_BG = QtGui.QColor(44, 44, 46)
 
+# Baking panel — alternating primary / secondary section backgrounds.
+BAKING_BG_PRIMARY = "#2c2c2e"
+BAKING_BG_SECONDARY = "#232325"
+
+# Baking panel typography (section titles vs field labels vs values).
+BAKING_TITLE_STYLE = (
+    "color: #dcdce4; font-weight: 600; font-size: 13px;"
+    " letter-spacing: 0.3px; background: transparent; border: none;")
+BAKING_LABEL_STYLE = (
+    "color: #909098; font-weight: 500; font-size: 11px;"
+    " background: transparent;")
+BAKING_VALUE_STYLE = (
+    "color: #ececf0; font-weight: 400; font-size: 12px;"
+    " background: transparent;")
+BAKING_MUTED_STYLE = (
+    "color: #808088; font-weight: 400; font-size: 11px;"
+    " background: transparent;")
+BAKING_MAP_BTN_STYLE = (
+    "QPushButton { min-height: 22px; max-height: 24px;"
+    " padding: 0 6px; font-size: 11px; font-weight: 500; }")
+BAKING_LOG_STYLE = (
+    "QPlainTextEdit { background: #1a1a1c; color: #c8c8d0;"
+    " border: 1px solid #333338; font-family: Consolas, monospace;"
+    " font-size: 11px; }")
+
 # -------------------------------------------------------------- stylesheet
 
 WIDGET_QSS = """

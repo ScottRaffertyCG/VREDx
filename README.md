@@ -13,6 +13,8 @@ applying MaterialX materials** inside Autodesk VRED Pro.
 - **Node canvas** — typed ports, bezier wires, magnetic pin snapping, undo/redo
 - **VRED bridge** — Send to VRED, Send & Apply, optional Auto Update, preview swatch
 - **Validation** — type/cycle checks and VRED-specific warnings before send
+- **Texture baking** — flat UV 0-1 bake to PNG/EXR via bundled ASWF MaterialX
+  (Window → Baking panel; VREDX → Bake Textures…)
 
 ## Requirements
 
@@ -47,6 +49,14 @@ VRED at runtime), not from the plugin folder path.
 
 ### From source
 
+Before building a release that includes texture baking, fetch the ASWF
+MaterialX runtime (Apache 2.0; bundled inside `vredx.zip`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/fetch_materialx_baker.ps1
+python build.py
+```
+
 Copy this repository into either location above as `VredX\`, then zip the
 `vredx/` folder to `vredx.zip` and delete the loose `vredx/` folder before
 starting VRED.
@@ -61,12 +71,36 @@ every loose `.py` file it finds. The zip keeps the library importable via
 VredX/
   VredX.py          ← only loose Python entry point VRED executes at startup
   vredx.zip         ← entire editor library (imported, not scanned)
+  baking_runtime/   ← shipped in release; move to Documents (see below)
   presets/          ← starter materials
   examples/         ← sample graphs
   resources/        ← icons
   README.md
   LICENSE
 ```
+
+**Texture baking runtime** (shipped in release zips, **not** left in ScriptPlugins):
+
+```
+VredX/
+  VredX.py
+  vredx.zip
+  baking_runtime/
+    materialx/          ← ASWF MaterialX 1.39.5 + embeddable Python 3.13
+```
+
+Move `baking_runtime` to the installed location (outside ScriptPlugins):
+
+```
+Documents/Autodesk/VredX/baking_runtime/
+```
+
+Until that move is done, VredX starts normally but **hides** the Baking tab and
+menu entries. The ASWF bundle must not stay under ScriptPlugins — VRED scans
+loose `.py` files there.
+
+Maintainers: run `scripts/fetch_materialx_baker.ps1` before `python build.py`
+so `baking_runtime/` is populated in the release folder.
 
 ## Presets
 
