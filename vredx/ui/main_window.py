@@ -20,6 +20,7 @@ from ..core import commands, validator
 from ..core.graph import Graph
 from ..core import mtlx_archive, mtlx_reader, mtlx_writer
 from ..vredbridge import vred_api
+from ..vredbridge import ui_integration
 from ..vredbridge.material_bridge import (
     BridgeError, MaterialBridge, default_document_path, is_writable_path,
 )
@@ -39,6 +40,7 @@ from .. import plugin_root  # noqa: E402  (zip-safe resource location)
 
 _PRESET_DIR = os.path.join(plugin_root(), "presets")
 _EXAMPLE_DIR = os.path.join(plugin_root(), "examples")
+_QWIDGETSIZE_MAX = 16777215
 
 
 class _MenubarCornerHeightSync(QtCore.QObject):
@@ -61,18 +63,35 @@ class _MenubarCornerHeightSync(QtCore.QObject):
             self._corner.setFixedHeight(height)
 
 
-class VredXFloatingShell(QtWidgets.QMainWindow):
-    """Top-level shell so the editor can be minimized like a normal window."""
+class VredXFloatingShell(QtWidgets.QWidget):
+    """Top-level shell so the editor can float like a normal window.
+
+    Plain QWidget on purpose: putting the editor in a QMainWindow blanks
+    the UI because nested QMenuBars get taken over.
+    """
 
     def __init__(self, editor):
-        super().__init__(None)
+        super().__init__(None, QtCore.Qt.Window)
         self._editor = editor
-        self.setObjectName("VredXRoot")
+        self.setObjectName("VredXFloatingShell")
         self.setWindowTitle(editor.windowTitle())
         self.setWindowIcon(editor.windowIcon())
-        self.setMinimumSize(1100, 640)
-        self.setCentralWidget(editor)
+        self.setMinimumSize(900, 560)
+        self.resize(1100, 640)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(editor)
+        editor.show()
         style.apply_vred_appearance(self)
+
+    def closeEvent(self, event):
+        editor = self._editor
+        if editor is not None and getattr(editor, "_floating_shell", None) is self:
+            editor._close_floating_editor()
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 class VredXWindow(QtWidgets.QWidget):
@@ -94,6 +113,8 @@ class VredXWindow(QtWidgets.QWidget):
         self._menu_attributes = None
         self._menu_palette = None
         self._menu_baking = None
+        self._menu_pop_out = None
+        self._menu_dock = None
         self.baking_panel = None
         self._baking_tab_index = None
 
@@ -111,6 +132,8 @@ class VredXWindow(QtWidgets.QWidget):
         self._floating_shell = None
         self._docked_parent = None
         self._docked_layout = None
+        self._vred_dock = None
+        self._dock_default_sized = False
 
         self.inspector = InspectorPanel(self.stack, self)
         self.validation = ValidationPanel(self)
@@ -1026,35 +1049,221 @@ class VredXWindow(QtWidgets.QWidget):
         else:
             self._toggle_baking(True)
 
+    def _set_window_mode_menus(self, floating):
+        if self._menu_pop_out is not None:
+            self._menu_pop_out.setEnabled(not floating)
+        if self._menu_dock is not None:
+            self._menu_dock.setEnabled(floating)
+
+    def _apply_docked_size_constraints(self):
+        self.setMinimumSize(
+            ui_integration.MIN_DOCK_WIDTH,
+            ui_integration.MIN_DOCK_HEIGHT,
+        )
+        self.setMaximumSize(_QWIDGETSIZE_MAX, _QWIDGETSIZE_MAX)
+        expanding = QtWidgets.QSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        self.setSizePolicy(expanding)
+        if self._splitter is not None:
+            self._splitter.setSizePolicy(expanding)
+
+    def sizeHint(self):
+        if self._floating_shell is not None:
+            return QtCore.QSize(1100, 640)
+        return QtCore.QSize(
+            ui_integration.DEFAULT_DOCK_WIDTH, 560)
+
+    def minimumSizeHint(self):
+        if self._floating_shell is not None:
+            return QtCore.QSize(900, 560)
+        return QtCore.QSize(
+            ui_integration.MIN_DOCK_WIDTH,
+            ui_integration.MIN_DOCK_HEIGHT,
+        )
+
+    def _detach_from_dock_hosts(self):
+        dock = self._vred_dock
+        if dock is not None:
+            try:
+                if dock.widget() is self:
+                    dock.setWidget(None)
+                if dock.isFloating():
+                    dock.setFloating(False)
+                dock.hide()
+            except RuntimeError:
+                self._vred_dock = None
+            self.setParent(None)
+            return
+
+        parent = self.parentWidget()
+        if (
+            parent is not None
+            and parent.layout() is not None
+            and not isinstance(parent, QtWidgets.QDockWidget)
+            and parent is self._docked_parent
+        ):
+            self._docked_layout = parent.layout()
+            self._docked_layout.removeWidget(self)
+        self.setParent(None)
+
+    def _ensure_vred_dock(self):
+        if self._vred_dock is not None:
+            try:
+                self._vred_dock.objectName()
+                return "dock"
+            except RuntimeError:
+                self._vred_dock = None
+
+        dock = ui_integration.ensure_vredx_dock()
+        if dock is not None:
+            self._vred_dock = dock
+            return "dock"
+
+        if (
+            self._docked_parent is not None
+            and self._docked_layout is not None
+            and not isinstance(self._docked_parent, QtWidgets.QDockWidget)
+        ):
+            try:
+                self._docked_parent.objectName()
+                return "plugin"
+            except RuntimeError:
+                self._docked_parent = None
+                self._docked_layout = None
+        return None
+
+    def _finish_docked_layout(self):
+        try:
+            self.updateGeometry()
+            layout = self.layout()
+            if layout is not None:
+                layout.activate()
+            if self._splitter is not None:
+                width = max(self._splitter.width(), self.width(), 1)
+                self._splitter.setSizes([
+                    max(160, int(width * 0.22)),
+                    max(240, int(width * 0.50)),
+                    max(180, int(width * 0.28)),
+                ])
+            dock = self._vred_dock
+            if dock is not None and dock.widget() is self:
+                area = dock.widget().parentWidget()
+                if area is not None:
+                    self.resize(max(self.width(), area.width()),
+                                max(self.height(), area.height()))
+        except RuntimeError:
+            pass
+
+    def ensure_docked_and_show(self):
+        """Show the editor docked in VRED (or raise the floating shell)."""
+        if self._floating_shell is not None:
+            try:
+                self._floating_shell.showNormal()
+                self._floating_shell.raise_()
+                self._floating_shell.activateWindow()
+                return
+            except RuntimeError:
+                self._floating_shell = None
+
+        self._apply_docked_size_constraints()
+        host = self._ensure_vred_dock()
+        if host == "plugin":
+            self.setParent(self._docked_parent)
+            if self._docked_layout.indexOf(self) < 0:
+                self._docked_layout.addWidget(self)
+            self.show()
+            try:
+                self._docked_parent.show()
+                self._docked_parent.raise_()
+            except RuntimeError:
+                pass
+            self._set_window_mode_menus(floating=False)
+            QtCore.QTimer.singleShot(0, self._finish_docked_layout)
+            return
+
+        if host == "dock":
+            ui_integration.restore_dock(self._vred_dock)
+            self._vred_dock.setWidget(self)
+            self._vred_dock.show()
+            self._vred_dock.raise_()
+            self.show()
+            if not self._dock_default_sized:
+                ui_integration.apply_default_dock_width(self._vred_dock)
+                self._dock_default_sized = True
+            self._set_window_mode_menus(floating=False)
+            QtCore.QTimer.singleShot(0, self._finish_docked_layout)
+            return
+
+        self.setParent(None)
+        self.setMinimumSize(900, 560)
+        self.resize(1100, 640)
+        self.show()
+        self.raise_()
+        self._set_window_mode_menus(floating=True)
+
+    def _release_from_floating_shell(self, shell):
+        if shell is None:
+            return
+        layout = shell.layout()
+        if layout is not None:
+            layout.removeWidget(self)
+        self.setParent(None)
+        shell._editor = None
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(_QWIDGETSIZE_MAX, _QWIDGETSIZE_MAX)
+
     def _pop_out_editor(self):
         if self._floating_shell is not None:
             self._floating_shell.showNormal()
             self._floating_shell.raise_()
             self._floating_shell.activateWindow()
             return
-        parent = self.parentWidget()
-        if parent is not None and parent.layout() is not None:
-            self._docked_parent = parent
-            self._docked_layout = parent.layout()
-            self._docked_layout.removeWidget(self)
+        self._detach_from_dock_hosts()
+        self.setMinimumSize(0, 0)
+        self.show()
         self._floating_shell = VredXFloatingShell(self)
         self._floating_shell.show()
-        self._menu_pop_out.setEnabled(False)
-        self._menu_dock.setEnabled(True)
+        self._floating_shell.raise_()
+        self._floating_shell.activateWindow()
+        self._set_window_mode_menus(floating=True)
+
+    def _close_floating_editor(self):
+        shell = self._floating_shell
+        if shell is None:
+            return
+        self._floating_shell = None
+        shell.hide()
+        self._release_from_floating_shell(shell)
+        shell.deleteLater()
+
+        self.hide()
+        self._apply_docked_size_constraints()
+        dock = self._vred_dock
+        if dock is not None:
+            try:
+                if dock.isFloating():
+                    dock.setFloating(False)
+                dock.hide()
+            except RuntimeError:
+                self._vred_dock = None
+        self._set_window_mode_menus(floating=False)
 
     def _dock_editor(self):
-        if self._floating_shell is None:
+        shell = self._floating_shell
+        if shell is None:
+            if self.parentWidget() is None:
+                self.ensure_docked_and_show()
             return
-        self._floating_shell.hide()
-        if self._docked_parent is not None and self._docked_layout is not None:
-            self.setParent(self._docked_parent)
-            self._docked_layout.addWidget(self)
-            self.show()
-        self._floating_shell.setCentralWidget(None)
-        self._floating_shell.deleteLater()
         self._floating_shell = None
-        self._menu_pop_out.setEnabled(True)
-        self._menu_dock.setEnabled(False)
+        shell.hide()
+        self._release_from_floating_shell(shell)
+        shell.deleteLater()
+        if isinstance(self._docked_parent, QtWidgets.QDockWidget):
+            self._docked_parent = None
+            self._docked_layout = None
+        self.ensure_docked_and_show()
 
     def keyPressEvent(self, event):
         if event.key() == QtCore.Qt.Key_S and \

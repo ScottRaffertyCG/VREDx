@@ -8,9 +8,13 @@ and insert a QMenu into the menu bar.  Everything is guarded so the
 module also imports outside VRED (menu installation is skipped).
 """
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 MENU_TITLE = "VREDX"
+DOCK_OBJECT_NAME = "VredXDock"
+DEFAULT_DOCK_WIDTH = 420
+MIN_DOCK_WIDTH = 280
+MIN_DOCK_HEIGHT = 200
 
 
 def vred_main_window():
@@ -37,6 +41,81 @@ def vred_main_window():
             except (RuntimeError, TypeError, ValueError):
                 pass
     return None
+
+
+def find_vredx_dock(main_window=None):
+    """Return an existing VREDX QDockWidget, or None."""
+    main_window = main_window or vred_main_window()
+    if main_window is None:
+        return None
+    for dock in main_window.findChildren(QtWidgets.QDockWidget):
+        if dock.objectName() == DOCK_OBJECT_NAME:
+            return dock
+    return None
+
+
+def _dock_features():
+    return (
+        QtWidgets.QDockWidget.DockWidgetMovable
+        | QtWidgets.QDockWidget.DockWidgetFloatable
+        | QtWidgets.QDockWidget.DockWidgetClosable
+    )
+
+
+def ensure_vredx_dock(main_window=None):
+    """Create or reuse the VREDX dock on VRED's main window."""
+    main_window = main_window or vred_main_window()
+    if main_window is None:
+        return None
+    dock = find_vredx_dock(main_window)
+    if dock is not None:
+        restore_dock(dock, main_window)
+        return dock
+    dock = QtWidgets.QDockWidget("VREDX", main_window)
+    dock.setObjectName(DOCK_OBJECT_NAME)
+    dock.setAllowedAreas(
+        QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea
+        | QtCore.Qt.BottomDockWidgetArea | QtCore.Qt.TopDockWidgetArea
+    )
+    dock.setFeatures(_dock_features())
+    dock.setMinimumWidth(MIN_DOCK_WIDTH)
+    main_window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+    return dock
+
+
+def restore_dock(dock, main_window=None):
+    """Reattach the dock and restore its title bar / features."""
+    if dock is None:
+        return
+    main_window = main_window or vred_main_window()
+    try:
+        dock.setTitleBarWidget(None)
+        dock.setWindowTitle("VREDX")
+        dock.setFeatures(_dock_features())
+        if dock.isFloating():
+            dock.setFloating(False)
+        if main_window is not None and dock.parentWidget() is not main_window:
+            main_window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+    except RuntimeError:
+        pass
+
+
+def apply_default_dock_width(dock, main_window=None):
+    """Clamp an oversized dock to a reasonable default width."""
+    main_window = main_window or vred_main_window()
+    if main_window is None or dock is None:
+        return
+    try:
+        current = dock.width()
+    except RuntimeError:
+        return
+    target = min(
+        DEFAULT_DOCK_WIDTH,
+        max(MIN_DOCK_WIDTH, int(main_window.width() * 0.35)),
+    )
+    if current <= 0 or current > target + 40:
+        main_window.resizeDocks(
+            [dock], [target], QtCore.Qt.Horizontal)
 
 
 class VredXMenu:

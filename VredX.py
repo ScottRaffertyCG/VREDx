@@ -7,9 +7,11 @@ Entry point loaded by VRED's script-plugin mechanism.  Ship as ``VredX.py`` plus
 ScriptPlugins — VRED's scanner executes every loose ``.py`` file it finds).
 
 Integration:
- * dockable panel via VREDPluginWidget (Scripts menu),
+ * dockable panel via VREDPluginWidget (Scripts menu) or QDockWidget,
  * top-level "VREDX" menu in the VRED menu bar,
- * floating window fallback when run from the Script Editor.
+ * floating window via Pop Out Editor.
+
+The menu is installed at load; the editor opens on demand.
 """
 
 import importlib
@@ -47,15 +49,28 @@ from vredx.vredbridge import ui_integration                    # noqa: E402
 from vredx.baking.runtime import is_runtime_available          # noqa: E402
 
 
+def _qt_alive(obj):
+    if obj is None:
+        return False
+    try:
+        obj.objectName()
+        return True
+    except RuntimeError:
+        return False
+
+
 class VredXPlugin:
     """Plugin lifecycle: window + VREDX menu."""
 
     def __init__(self, parent_widget):
         self._library = None
         self.window = VredXWindow(
-            None, parent_widget, library_loader=self._load_library)
+            None, None, library_loader=self._load_library)
+        self.window.hide()
 
         if parent_widget is not None and parent_widget.layout() is not None:
+            self.window._docked_parent = parent_widget
+            self.window._docked_layout = parent_widget.layout()
             parent_widget.layout().addWidget(self.window)
             try:
                 parent_widget.setWindowTitle("VREDX")
@@ -64,12 +79,8 @@ class VredXPlugin:
                 flags |= (QtCore.Qt.WindowMinimizeButtonHint
                           | QtCore.Qt.WindowMaximizeButtonHint)
                 parent_widget.setWindowFlags(flags)
-                parent_widget.show()
             except (AttributeError, RuntimeError):
                 pass
-        else:
-            self.window.setMinimumSize(1100, 640)
-            self.window.show()
 
         self.menu = ui_integration.VredXMenu()
         menu_callbacks = {
@@ -94,19 +105,17 @@ class VredXPlugin:
 
     def show_editor(self):
         window = self.window
+        if not _qt_alive(window):
+            return
         window.ensure_editor_ready()
-        window.show()
-        window.raise_()
-        parent = window.parentWidget()
-        while parent is not None:
-            parent.show()
-            parent = parent.parentWidget()
-            if isinstance(parent, QtWidgets.QMainWindow):
-                break
+        window.ensure_docked_and_show()
 
     def pop_out_editor(self):
-        self.show_editor()
-        self.window._pop_out_editor()
+        window = self.window
+        if not _qt_alive(window):
+            return
+        window.ensure_editor_ready()
+        window._pop_out_editor()
 
     def new_material(self):
         self.show_editor()
@@ -124,8 +133,11 @@ class VredXPlugin:
 
     def show_about(self):
         import vredx
+        parent = self.window
+        if not _qt_alive(parent):
+            parent = None
         QtWidgets.QMessageBox.about(
-            self.window, "About VredX",
+            parent, "About VredX",
             "<b>VredX %s</b><br>MaterialX authoring for Autodesk VRED.<br>"
             "Node palette from:<br><code>%s</code><br><br>"
             "Texture baking powered by "
@@ -136,7 +148,16 @@ class VredXPlugin:
 
     def shutdown(self):
         self.menu.remove()
-        self.window.shutdown()
+        if _qt_alive(self.window):
+            dock = getattr(self.window, "_vred_dock", None)
+            if _qt_alive(dock):
+                try:
+                    dock.setWidget(None)
+                    dock.close()
+                    dock.deleteLater()
+                except RuntimeError:
+                    pass
+            self.window.shutdown()
 
 
 try:
